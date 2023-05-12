@@ -1,0 +1,16 @@
+version: '3.4'
+services:
+  grafana:
+    image: grafana/grafana-oss:9.5.1
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=$GF_SECURITY_ADMIN_PASSWORD
+    ports:
+      - "3000:3000"
+    labels:
+      k8ify.singleton: true
+      k8ify.expose: operator-dev-grafana.$TEST_DOMAIN
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.01"
+          memory: 512M
