@@ -6,6 +6,7 @@ import (
 	controller "github.com/appuio/grafana-organizations-operator/pkg"
 	grafana "github.com/grafana/grafana-api-golang-client"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
@@ -70,13 +71,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	db, err := os.ReadFile("default-dashboard.json")
+	if err != nil {
+		klog.Errorf("Could not read default dashboard: %v\n", err)
+		os.Exit(1)
+	}
+	dashboard := make(map[string]interface{})
+	json.Unmarshal(db, &dashboard)
+
 	klog.Info("Starting initial sync...")
-	err = controller.ReconcileAllOrgs(ctx, controlApiClient, grafanaConfig, GrafanaUrl)
+	err = controller.ReconcileAllOrgs(ctx, controlApiClient, grafanaConfig, GrafanaUrl, dashboard)
 	if err != nil {
 		klog.Errorf("Could not do initial reconciliation: %v\n", err)
 		os.Exit(1)
 	}
-	klog.Info("Initial sync done")
 
 	for {
 		select {
@@ -84,7 +92,7 @@ func main() {
 		case <-ctx.Done():
 			os.Exit(0)
 		}
-		err = controller.ReconcileAllOrgs(ctx, controlApiClient, grafanaConfig, GrafanaUrl)
+		err = controller.ReconcileAllOrgs(ctx, controlApiClient, grafanaConfig, GrafanaUrl, dashboard)
 		if err != nil {
 			klog.Errorf("Could not reconcile (will retry): %v\n", err)
 		}
