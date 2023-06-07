@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	orgs "github.com/appuio/control-api/apis/organization/v1"
+	controlapi "github.com/appuio/control-api/apis/v1"
 	controller "github.com/appuio/grafana-organizations-operator/pkg"
 	grafana "github.com/grafana/grafana-api-golang-client"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -43,16 +44,41 @@ func main() {
 	klog.Infof("GRAFANA_URL: %s\n", GrafanaUrl)
 	klog.Infof("GRAFANA_USERNAME: %s\n", GrafanaUsername)
 
-	controlApiConfig := &rest.Config{}
-	controlApiConfig.BearerToken = ControlApiToken
-	controlApiConfig.Host = ControlApiUrl
-	controlApiConfig.GroupVersion = &orgs.GroupVersion
-	controlApiConfig.APIPath = "/apis"
-	controlApiConfig.NegotiatedSerializer = serializer.NewCodecFactory(scheme.Scheme)
+	// Because of the strange design of the k8s client we actually need two client objects, which both internally use the same httpClient.
+	// To make this work we also need three (!) config objects, a common one for the httpClient and one for each k8s client.
+	commonConfig := &rest.Config{}
+	commonConfig.BearerToken = ControlApiToken
+	httpClient, err := rest.HTTPClientFor(commonConfig)
+	if err != nil {
+		klog.Errorf("Could not create Control API httpClient: %v\n", err)
+		os.Exit(1)
+	}
+
+	organizationAppuioIoConfig := &rest.Config{}
+	organizationAppuioIoConfig.Host = ControlApiUrl
+	organizationAppuioIoConfig.APIPath = "/apis"
+	organizationAppuioIoConfig.GroupVersion = &orgs.GroupVersion
+	organizationAppuioIoConfig.NegotiatedSerializer = serializer.NewCodecFactory(scheme.Scheme)
+	organizationAppuioIoClient, err := rest.RESTClientForConfigAndClient(organizationAppuioIoConfig, httpClient)
+	if err != nil {
+		klog.Errorf("Could not create Control API client for organization.appuio.io: %v\n", err)
+		os.Exit(1)
+	}
+
+	appuioIoConfig := &rest.Config{}
+	appuioIoConfig.Host = ControlApiUrl
+	appuioIoConfig.APIPath = "/apis"
+	appuioIoConfig.GroupVersion = &controlapi.GroupVersion
+	appuioIoConfig.NegotiatedSerializer = serializer.NewCodecFactory(scheme.Scheme)
+	appuioIoClient, err := rest.RESTClientForConfigAndClient(appuioIoConfig, httpClient)
+	if err != nil {
+		klog.Errorf("Could not connect Control API client for appuio.io: %v\n", err)
+		os.Exit(1)
+	}
 
 	grafanaConfig := grafana.Config{Client: http.DefaultClient, BasicAuth: url.UserPassword(GrafanaUsername, GrafanaPassword)}
 
-	// ctx will be passed to lock and controller to signal termination
+	// ctx will be passed to controller to signal termination
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -65,12 +91,6 @@ func main() {
 		cancel()
 	}()
 
-	controlApiClient, err := rest.RESTClientFor(controlApiConfig)
-	if err != nil {
-		klog.Errorf("Could not connect to Control API: %v\n", err)
-		os.Exit(1)
-	}
-
 	db, err := os.ReadFile("default-dashboard.json")
 	if err != nil {
 		klog.Errorf("Could not read default dashboard: %v\n", err)
@@ -80,7 +100,7 @@ func main() {
 	json.Unmarshal(db, &dashboard)
 
 	klog.Info("Starting initial sync...")
-	err = controller.ReconcileAllOrgs(ctx, controlApiClient, grafanaConfig, GrafanaUrl, dashboard)
+	err = controller.ReconcileAllOrgs(ctx, organizationAppuioIoClient, appuioIoClient, grafanaConfig, GrafanaUrl, dashboard)
 	if err != nil {
 		klog.Errorf("Could not do initial reconciliation: %v\n", err)
 		os.Exit(1)
@@ -92,7 +112,7 @@ func main() {
 		case <-ctx.Done():
 			os.Exit(0)
 		}
-		err = controller.ReconcileAllOrgs(ctx, controlApiClient, grafanaConfig, GrafanaUrl, dashboard)
+		err = controller.ReconcileAllOrgs(ctx, organizationAppuioIoClient, appuioIoClient, grafanaConfig, GrafanaUrl, dashboard)
 		if err != nil {
 			klog.Errorf("Could not reconcile (will retry): %v\n", err)
 		}
