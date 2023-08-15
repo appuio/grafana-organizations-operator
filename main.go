@@ -2,14 +2,9 @@ package main
 
 import (
 	"context"
-	orgs "github.com/appuio/control-api/apis/organization/v1"
-	controlapi "github.com/appuio/control-api/apis/v1"
 	controller "github.com/appuio/grafana-organizations-operator/pkg"
 	grafana "github.com/grafana/grafana-api-golang-client"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/json"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"net/http"
 	"net/url"
@@ -20,63 +15,70 @@ import (
 )
 
 var (
-	ControlApiToken string
-	ControlApiUrl   string
-	GrafanaUrl      string
-	GrafanaUsername string
-	GrafanaPassword string
+	GrafanaUrl                     string
+	GrafanaUsername                string
+	GrafanaPassword                string
+	KeycloakUrl                    string
+	KeycloakRealm                  string
+	KeycloakUsername               string
+	KeycloakPassword               string
+	KeycloakClientId               string
+	KeycloakAdminGroupPath         string
+	KeycloakAutoAssignOrgGroupPath string
 )
 
 func main() {
-	ControlApiUrl = os.Getenv("CONTROL_API_URL")
-	ControlApiToken = os.Getenv("CONTROL_API_TOKEN")
 	GrafanaUrl = os.Getenv("GRAFANA_URL")
 	GrafanaUsername = os.Getenv("GRAFANA_USERNAME")
 	if GrafanaUsername == "" {
 		GrafanaUsername = os.Getenv("admin-user") // env variable name used by Grafana Helm chart. And yes using '-' is stupid because of compatibility issues with some shells.
 	}
 	GrafanaPassword = os.Getenv("GRAFANA_PASSWORD")
+	GrafanaPasswordHidden := ""
 	if GrafanaPassword == "" {
 		GrafanaPassword = os.Getenv("admin-password") // env variable name used by Grafana Helm chart. And yes using '-' is stupid because of compatibility issues with some shells.
 	}
-
-	klog.Infof("CONTROL_API_URL: %s\n", ControlApiUrl)
-	klog.Infof("GRAFANA_URL: %s\n", GrafanaUrl)
-	klog.Infof("GRAFANA_USERNAME: %s\n", GrafanaUsername)
-
-	// Because of the strange design of the k8s client we actually need two client objects, which both internally use the same httpClient.
-	// To make this work we also need three (!) config objects, a common one for the httpClient and one for each k8s client.
-	commonConfig := &rest.Config{}
-	commonConfig.BearerToken = ControlApiToken
-	httpClient, err := rest.HTTPClientFor(commonConfig)
-	if err != nil {
-		klog.Errorf("Could not create Control API httpClient: %v\n", err)
-		os.Exit(1)
+	if GrafanaPassword != "" {
+		GrafanaPasswordHidden = "***hidden***"
 	}
 
-	organizationAppuioIoConfig := &rest.Config{}
-	organizationAppuioIoConfig.Host = ControlApiUrl
-	organizationAppuioIoConfig.APIPath = "/apis"
-	organizationAppuioIoConfig.GroupVersion = &orgs.GroupVersion
-	organizationAppuioIoConfig.NegotiatedSerializer = serializer.NewCodecFactory(scheme.Scheme)
-	organizationAppuioIoClient, err := rest.RESTClientForConfigAndClient(organizationAppuioIoConfig, httpClient)
-	if err != nil {
-		klog.Errorf("Could not create Control API client for organization.appuio.io: %v\n", err)
-		os.Exit(1)
+	KeycloakUrl = os.Getenv("KEYCLOAK_URL")
+	KeycloakRealm = os.Getenv("KEYCLOAK_REALM")
+	KeycloakUsername = os.Getenv("KEYCLOAK_USERNAME")
+	KeycloakPassword = os.Getenv("KEYCLOAK_PASSWORD")
+	KeycloakClientId = os.Getenv("KEYCLOAK_CLIENT_ID")
+	KeycloakPasswordHidden := ""
+	if KeycloakPassword != "" {
+		KeycloakPasswordHidden = "***hidden***"
 	}
+	KeycloakAdminGroupPath = os.Getenv("KEYCLOAK_ADMIN_GROUP_PATH")
+	KeycloakAutoAssignOrgGroupPath = os.Getenv("KEYCLOAK_AUTO_ASSIGN_ORG_GROUP_PATH")
 
-	appuioIoConfig := &rest.Config{}
-	appuioIoConfig.Host = ControlApiUrl
-	appuioIoConfig.APIPath = "/apis"
-	appuioIoConfig.GroupVersion = &controlapi.GroupVersion
-	appuioIoConfig.NegotiatedSerializer = serializer.NewCodecFactory(scheme.Scheme)
-	appuioIoClient, err := rest.RESTClientForConfigAndClient(appuioIoConfig, httpClient)
+	klog.Infof("GRAFANA_URL:                         %s\n", GrafanaUrl)
+	klog.Infof("GRAFANA_USERNAME:                    %s\n", GrafanaUsername)
+	klog.Infof("GRAFANA_PASSWORD:                    %s\n", GrafanaPasswordHidden)
+	klog.Infof("KEYCLOAK_URL:                        %s\n", KeycloakUrl)
+	klog.Infof("KEYCLOAK_REALM:                      %s\n", KeycloakRealm)
+	klog.Infof("KEYCLOAK_USERNAME:                   %s\n", KeycloakUsername)
+	klog.Infof("KEYCLOAK_PASSWORD:                   %s\n", KeycloakPasswordHidden)
+	klog.Infof("KEYCLOAK_CLIENT_ID:                  %s\n", KeycloakClientId)
+	klog.Infof("KEYCLOAK_ADMIN_GROUP_PATH:           %s\n", KeycloakAdminGroupPath)
+	klog.Infof("KEYCLOAK_AUTO_ASSIGN_ORG_GROUP_PATH: %s\n", KeycloakAutoAssignOrgGroupPath)
+
+	keycloakClient, err := controller.NewKeycloakClient(KeycloakUrl, KeycloakRealm, KeycloakUsername, KeycloakPassword, KeycloakClientId, KeycloakAdminGroupPath, KeycloakAutoAssignOrgGroupPath)
 	if err != nil {
-		klog.Errorf("Could not connect Control API client for appuio.io: %v\n", err)
+		klog.Errorf("Could not create keycloakClient client: %v\n", err)
 		os.Exit(1)
 	}
+	defer keycloakClient.CloseIdleConnections()
 
 	grafanaConfig := grafana.Config{Client: http.DefaultClient, BasicAuth: url.UserPassword(GrafanaUsername, GrafanaPassword)}
+	grafanaClient, err := controller.NewGrafanaClient(GrafanaUrl, grafanaConfig)
+	if err != nil {
+		klog.Errorf("Could not create Grafana client: %v\n", err)
+		os.Exit(1)
+	}
+	defer grafanaClient.CloseIdleConnections()
 
 	// ctx will be passed to controller to signal termination
 	ctx, cancel := context.WithCancel(context.Background())
@@ -100,19 +102,19 @@ func main() {
 	json.Unmarshal(db, &dashboard)
 
 	klog.Info("Starting initial sync...")
-	err = controller.ReconcileAllOrgs(ctx, organizationAppuioIoClient, appuioIoClient, grafanaConfig, GrafanaUrl, dashboard)
+	err = controller.Reconcile(ctx, keycloakClient, grafanaClient, dashboard)
 	if err != nil {
 		klog.Errorf("Could not do initial reconciliation: %v\n", err)
 		os.Exit(1)
 	}
 
 	for {
+		err = controller.Reconcile(ctx, keycloakClient, grafanaClient, dashboard)
 		select {
-		case <-time.After(10 * time.Second):
+		case <-time.After(2 * time.Second):
 		case <-ctx.Done():
 			os.Exit(0)
 		}
-		err = controller.ReconcileAllOrgs(ctx, organizationAppuioIoClient, appuioIoClient, grafanaConfig, GrafanaUrl, dashboard)
 		if err != nil {
 			klog.Errorf("Could not reconcile (will retry): %v\n", err)
 		}

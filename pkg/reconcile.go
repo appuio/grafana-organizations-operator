@@ -2,138 +2,141 @@ package controller
 
 import (
 	"context"
-	orgs "github.com/appuio/control-api/apis/organization/v1"
-	grafana "github.com/grafana/grafana-api-golang-client"
-	"github.com/hashicorp/go-cleanhttp"
-	"k8s.io/client-go/rest"
+	"errors"
 	"k8s.io/klog/v2"
-	"strings"
 )
 
-func ReconcileAllOrgs(ctx context.Context, organizationAppuioIoClient *rest.RESTClient, appuioIoClient *rest.RESTClient, grafanaConfig grafana.Config, grafanaUrl string, dashboard map[string]interface{}) error {
-	// Fetch everything we need from the control API.
-	// This is racy because data can change while we fetch it, making the result inconsistent. This may lead to sync errors,
-	// but they should disappear with subsequent syncs.
-	controlApiOrganizationsList, err := getControlApiOrganizations(ctx, organizationAppuioIoClient)
-	if err != nil {
-		return err
-	}
-	controlApiUsersMap, err := getControlApiUsersMap(ctx, appuioIoClient)
-	if err != nil {
-		return err
-	}
+var (
+	interruptedError = errors.New("interrupted")
+)
 
-	// Generic Grafana client, not specific to an org (deeper down we'll also create an org-specific Grafana client)
-	grafanaConfig.Client = cleanhttp.DefaultPooledClient()
-	grafanaClient, err := grafana.New(grafanaUrl, grafanaConfig)
-	if err != nil {
-		return err
-	}
-	defer grafanaConfig.Client.CloseIdleConnections()
-
-	// Get all orgs from Grafana
-	orgs, err := grafanaClient.Orgs()
+func Reconcile(ctx context.Context, keycloakClient *KeycloakClient, grafanaClient *GrafanaClient, dashboard map[string]interface{}) error {
+	klog.Infof("Fetching Keycloak access token...")
+	keycloakToken, err := keycloakClient.GetToken()
 	if err != nil {
 		return err
 	}
 
-	// Users are a top-level resource, like organizations. Users can exist even if they don't have permissions to do anything.
-	grafanaUsersMap, err := reconcileUsers(grafanaClient, controlApiUsersMap)
+	klog.Infof("Fetching users from Keycloak...")
+	keycloakUsers, err := keycloakClient.GetUsers(keycloakToken)
+	if err != nil {
+		return err
+	}
+	klog.Infof("Found %d users", len(keycloakUsers))
+
+	klog.Infof("Syncing users to Grafana...")
+	keycloakUsers, err = reconcileUsers(ctx, keycloakUsers, grafanaClient)
+	if err != nil {
+		return err
+	}
+	klog.Infof("Synced %d users", len(keycloakUsers))
+
+	klog.Infof("Fetching group memberships from Keycloak...")
+	keycloakUserGroups, err := keycloakClient.GetGroupMemberships(keycloakToken, keycloakUsers)
+	if err != nil {
+		return err
+	}
+	memberships := 0
+	for _, groups := range keycloakUserGroups {
+		memberships += len(groups)
+	}
+	klog.Infof("Found %d group memberships", memberships)
+
+	klog.Infof("Fetching organizations from Keycloak...")
+	keycloakOrganizations, err := keycloakClient.GetOrganizations(keycloakToken)
+	klog.Infof("Found %d organizations", len(keycloakOrganizations))
+
+	klog.Infof("Extracting admin users...")
+	var keycloakAdmins []*KeycloakUser
+	var keycloakUsersWithoutAdmins []*KeycloakUser
+outAdmins:
+	for _, user := range keycloakUsers {
+		for _, group := range keycloakUserGroups[user] {
+			if group.Path == keycloakClient.adminGroupPath {
+				keycloakAdmins = append(keycloakAdmins, user)
+				continue outAdmins
+			}
+		}
+		keycloakUsersWithoutAdmins = append(keycloakUsersWithoutAdmins, user)
+	}
+	klog.Infof("Found %d admin users", len(keycloakAdmins))
+
+	klog.Infof("Extracting auto_assign_org users...")
+	var keycloakAutoAssignOrgUsers []*KeycloakUser
+outAutoAssignOrgUsers:
+	for _, user := range keycloakUsers {
+		for _, group := range keycloakUserGroups[user] {
+			if group.Path == keycloakClient.autoAssignOrgGroupPath {
+				keycloakAutoAssignOrgUsers = append(keycloakAutoAssignOrgUsers, user)
+				continue outAutoAssignOrgUsers
+			}
+		}
+	}
+	klog.Infof("Found %d auto_assign_org users", len(keycloakAutoAssignOrgUsers))
+
+	grafanaOrgsMap, err := reconcileAllOrgs(ctx, keycloakOrganizations, grafanaClient, dashboard)
 	if err != nil {
 		return err
 	}
 
-	// Lookup table org -> users (editors or viewers)
-	appuioControlApiOrganizationUsersMap, err := getControlApiOrganizationUsersMap(ctx, grafanaUsersMap, appuioIoClient)
+	klog.Infof("Fetching auto_assign_org_id...")
+	autoAssignOrgId, err := grafanaClient.GetAutoAssignOrgId()
+	if err != nil {
+		return err
+	}
+	klog.Infof("Checking permissions of auto_assign_org %d", autoAssignOrgId)
+	var permissions []GrafanaPermissionSpec
+	for _, keycloakAutoAssignOrgUser := range keycloakAutoAssignOrgUsers {
+		permissions = append(permissions, GrafanaPermissionSpec{Uid: keycloakAutoAssignOrgUser.Username, PermittedRoles: []string{"Viewer", "Editor", "Admin"}})
+	}
+	err = reconcileSingleOrgPermissions(ctx, permissions, autoAssignOrgId, grafanaClient)
 	if err != nil {
 		return err
 	}
 
-	// List of admin users (for now this is equivalent to all users of the "vshn" org). The same for all orgs.
-	var desiredAdmins []grafana.User
-	var ok bool
-	if desiredAdmins, ok = appuioControlApiOrganizationUsersMap["vshn"]; !ok {
-		desiredAdmins = []grafana.User{}
+	klog.Infof("Checking permissions of normal orgs...")
+	grafanaPermissionsMap := getGrafanaPermissionsMap(keycloakUserGroups, keycloakAdmins, keycloakOrganizations)
+	err = reconcilePermissions(ctx, grafanaPermissionsMap, grafanaOrgsMap, grafanaClient)
+	if err != nil {
+		return err
 	}
 
-	// Lookup table org ID (the one from the control API, type string) -> Grafana org
-	grafanaOrgLookup := make(map[string]grafana.Org)
-	for _, org := range orgs {
-		nameComponents := strings.Split(org.Name, " - ")
-		if len(nameComponents) < 2 || strings.Contains(nameComponents[0], " ") {
-			continue
-		}
-		grafanaOrgLookup[nameComponents[0]] = org
-	}
-
-	// first make sure that all orgs that need to be present are present
-	for _, o := range controlApiOrganizationsList {
-		grafanaOrg, err := reconcileOrgBasic(grafanaOrgLookup, grafanaClient, o)
-		if err != nil {
-			return err
-		}
-		delete(grafanaOrgLookup, o.Name)
-
-		err = reconcileOrgSettings(grafanaOrg, o.Name, grafanaConfig, grafanaUrl, dashboard, appuioControlApiOrganizationUsersMap[o.Name], desiredAdmins)
-		if err != nil {
-			return err
-		}
-
-		// select with a default case is apparently the only way to do a non-blocking read from a channel
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			// carry on
-		}
-	}
-
-	// then delete the ones that shouldn't be present
-	for _, grafanaOrgToBeDeleted := range grafanaOrgLookup {
-		klog.Infof("Organization %d should not exist, deleting: '%s'", grafanaOrgToBeDeleted.ID, grafanaOrgToBeDeleted.Name)
-		err = grafanaClient.DeleteOrg(grafanaOrgToBeDeleted.ID)
-		if err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-	}
-
-	klog.Infof("Reconcile complete")
+	grafanaClient.CloseIdleConnections()
+	keycloakClient.CloseIdleConnections()
 
 	return nil
 }
 
-// Sync the basic org. Uses the generic Grafana client.
-func reconcileOrgBasic(grafanaOrgLookup map[string]grafana.Org, grafanaClient *grafana.Client, o orgs.Organization) (*grafana.Org, error) {
-	displayName := o.Name
-	if o.Spec.DisplayName != "" {
-		displayName = o.Spec.DisplayName
-	}
-	grafanaOrgDesiredName := o.Name + " - " + displayName
+type GrafanaPermissionSpec struct {
+	Uid            string
+	PermittedRoles []string
+}
 
-	if grafanaOrg, ok := grafanaOrgLookup[o.Name]; ok {
-		if grafanaOrg.Name != grafanaOrgDesiredName {
-			klog.Infof("Organization %d has wrong name: '%s', should be '%s'", grafanaOrg.ID, grafanaOrg.Name, grafanaOrgDesiredName)
-			err := grafanaClient.UpdateOrg(grafanaOrg.ID, grafanaOrgDesiredName)
-			if err != nil {
-				return nil, err
+// Convert group memberships found in Keycloak into permissions on organizations in Grafana
+func getGrafanaPermissionsMap(keycloakUserGroups map[*KeycloakUser][]*KeycloakGroup, keycloakAdmins []*KeycloakUser, keycloakOrganizations []*KeycloakGroup) map[string][]GrafanaPermissionSpec {
+	permissionsMap := make(map[string][]GrafanaPermissionSpec)
+	for _, keycloakOrganization := range keycloakOrganizations {
+		permissionsMap[keycloakOrganization.Name] = []GrafanaPermissionSpec{}
+
+	userLoop:
+		for keycloakUser, groups := range keycloakUserGroups {
+			// If this user is an admin we ignore any specific organization permissions
+			for _, admin := range keycloakAdmins {
+				if admin.Username == keycloakUser.Username {
+					continue userLoop
+				}
+			}
+			for _, group := range groups {
+				if keycloakOrganization.IsSameOrganization(group) {
+					permissionsMap[keycloakOrganization.GetOrganizationName()] = append(permissionsMap[keycloakOrganization.GetOrganizationName()], GrafanaPermissionSpec{Uid: keycloakUser.Username, PermittedRoles: []string{"Editor", "Viewer"}})
+					continue userLoop // don't try to find further permissions, otherwise we may get more than one permission for the same user on the same org
+				}
 			}
 		}
-		return &grafanaOrg, nil
-	}
 
-	klog.Infof("Organization missing, creating: '%s'", grafanaOrgDesiredName)
-	grafanaOrgId, err := grafanaClient.NewOrg(grafanaOrgDesiredName)
-	if err != nil {
-		return nil, err
+		for _, admin := range keycloakAdmins {
+			permissionsMap[keycloakOrganization.Name] = append(permissionsMap[keycloakOrganization.Name], GrafanaPermissionSpec{Uid: admin.Username, PermittedRoles: []string{"Admin", "Editor", "Viewer"}})
+		}
 	}
-	grafanaOrg, err := grafanaClient.Org(grafanaOrgId)
-	if err != nil {
-		return nil, err
-	}
-	return &grafanaOrg, nil
+	return permissionsMap
 }

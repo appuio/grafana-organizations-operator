@@ -1,95 +1,76 @@
 package controller
 
 import (
-	"crypto/rand"
-	controlapi "github.com/appuio/control-api/apis/v1"
+	"context"
 	grafana "github.com/grafana/grafana-api-golang-client"
 	"k8s.io/klog/v2"
-	"math/big"
 )
 
-func generatePassword() (string, error) {
-	const voc string = "abcdfghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	len := big.NewInt(int64(len(voc)))
-	pw := ""
-
-	for i := 0; i < 32; i++ {
-		index, err := rand.Int(rand.Reader, len)
-		if err != nil {
-			return "", err
-		}
-		pw = pw + string(voc[index.Uint64()])
-	}
-	return pw, nil
-}
-
-func createUser(client *grafana.Client, user controlapi.User) (*grafana.User, error) {
-	password, err := generatePassword()
+func reconcileUsers(ctx context.Context, keycloakUsers []*KeycloakUser, grafanaClient *GrafanaClient) ([]*KeycloakUser, error) {
+	var syncedUsers []*KeycloakUser
+	grafanaUsers, err := grafanaClient.Users()
 	if err != nil {
 		return nil, err
 	}
-	grafanaUser := grafana.User{
-		Email:    user.Status.Email,
-		Login:    user.Name,
-		Name:     user.Status.DisplayName,
-		Password: password,
-	}
-	grafanaUser.ID, err = client.CreateUser(grafanaUser)
-	if err != nil {
-		return nil, err
-	}
-	return &grafanaUser, nil
-}
-
-func reconcileUsers(client *grafana.Client, users map[string]controlapi.User) (map[string]grafana.User, error) {
-	grafanaUsers, err := client.Users()
-	if err != nil {
-		return nil, err
-	}
-	grafanaUsersSet := make(map[string]grafana.UserSearch)
+	grafanaUsersMap := make(map[string]grafana.UserSearch)
 	for _, grafanaUser := range grafanaUsers {
-		grafanaUsersSet[grafanaUser.Login] = grafanaUser
+		if grafanaUser.Login != "admin" && grafanaUser.Login != grafanaClient.GetUsername() { // ignore admin
+			grafanaUsersMap[grafanaUser.Login] = grafanaUser
+		}
 	}
 
-	finalGrafanaUsersMap := make(map[string]grafana.User)
-
-	for _, user := range users {
-		if grafanaUserSearch, ok := grafanaUsersSet[user.Name]; ok {
-			if grafanaUserSearch.Email != user.Status.Email ||
+	for _, keycloakUser := range keycloakUsers {
+		var grafanaUser *grafana.User
+		if grafanaUserSearch, ok := grafanaUsersMap[keycloakUser.Username]; ok {
+			if grafanaUserSearch.Email != keycloakUser.Email ||
 				grafanaUserSearch.IsAdmin ||
-				grafanaUserSearch.Login != user.Name ||
-				grafanaUserSearch.Name != user.Status.DisplayName {
-				klog.Infof("User '%s' differs, fixing", user.Name)
-				grafanaUser := grafana.User{
+				grafanaUserSearch.Login != keycloakUser.Username ||
+				grafanaUserSearch.Name != keycloakUser.GetDisplayName() {
+				klog.Infof("User '%s' differs, fixing", keycloakUser.Username)
+				grafanaUser = &grafana.User{
 					ID:      grafanaUserSearch.ID,
 					IsAdmin: false,
-					Login:   user.Name,
-					Name:    user.Status.DisplayName,
+					Login:   keycloakUser.Username,
+					Name:    keycloakUser.GetDisplayName(),
+					Email:   keycloakUser.Email,
 				}
-				client.UserUpdate(grafanaUser)
+				grafanaClient.UserUpdate(*grafanaUser)
 			}
-			finalGrafanaUsersMap[grafanaUserSearch.Login] = grafana.User{ID: grafanaUserSearch.ID, Login: grafanaUserSearch.Login}
-		} else {
-			klog.Infof("User '%s' is missing, adding", user.Name)
-			grafanaUser, err := createUser(client, user)
-			if err != nil {
-				//return err
-				// for now just continue in case errors happen
-				klog.Error(err)
-				continue
-			}
-			klog.Infof("%d", grafanaUser.ID)
-			finalGrafanaUsersMap[grafanaUser.Login] = grafana.User{ID: grafanaUser.ID, Login: grafanaUser.Login}
+			syncedUsers = append(syncedUsers, keycloakUser)
 		}
-		klog.Infof("User '%s' OK", user.Name)
-		delete(grafanaUsersSet, user.Name)
+		// For now we do not create users in Grafana.
+		// The original thought of this was that it would be possible to set up the users and permissions before the user logs in for the first time, therefore providing him/her with correct permissions upon first login.
+		// Turns out this doesn't work, as with the first OAuth login Grafana resets all permissions of the user, breaking this entire scheme.
+		// Instead now we let Grafana create the user with invalid permissions, then we go and fix the permissions.
+		/*
+			else {
+				klog.Infof("User '%s' is missing, adding", keycloakUser.Username)
+				grafanaUser, err = createUser(grafanaClient, keycloakUser)
+				if err != nil {
+					// for now just continue in case errors happen
+					klog.Error(err)
+					continue
+				}
+			}*/
+		delete(grafanaUsersMap, keycloakUser.Username)
+
+		select {
+		case <-ctx.Done():
+			return nil, interruptedError
+		default:
+		}
 	}
 
-	delete(grafanaUsersSet, "admin") // don't delete the admin user...
+	for _, grafanaUser := range grafanaUsersMap {
+		klog.Infof("User '%s' (%d) not found in Keycloak, removing", grafanaUser.Login, grafanaUser.ID)
+		grafanaClient.DeleteUser(grafanaUser.ID)
 
-	for _, grafanaUser := range grafanaUsersSet {
-		klog.Infof("User '%s' (%d) is not in APPUiO Control API, removing", grafanaUser.Login, grafanaUser.ID)
-		client.DeleteUser(grafanaUser.ID)
+		select {
+		case <-ctx.Done():
+			return nil, interruptedError
+		default:
+		}
 	}
-	return finalGrafanaUsersMap, nil
+
+	return syncedUsers, nil
 }
