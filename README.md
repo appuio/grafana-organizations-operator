@@ -33,6 +33,7 @@ The Grafana Organizations Operator only cares about organizations present in Key
   * We can't create the user and assign the correct permissions before the user logs in for the first time, because upon oauth login Grafana resets all permissions.
   * Therefore we just fix permissions after the user has been created by Grafana. This leaves a time gap during which the user can have permissions he shouldn't have, but there isn't much we can do against that.
   * A possible improvement would be to configure Grafana such that `auto_assign_org_id` points to a completely empty org, that way the invalid permissions wouldn't matter, but this isn't something this operator can configure.
+* Grafana may make it impossible in the future to change permissions of OAuth users via the API. Today it is already impossible via the UI. This would break the operator in its current form entirely.
 * Because the `grafana-api-golang-client` implementation is incomplete we are wrapping it in the GrafanaClient type and add some functionality.
 * The Grafana API often ignores the OrgID JSON field. The only workaround for this is to set the HTTP header `x-grafana-org-id`. The GrafanaClient wrapper takes care of this.
 
