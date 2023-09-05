@@ -4,7 +4,8 @@ go 1.20
 
 require (
 	github.com/appuio/control-api v0.26.0
-	github.com/grafana/grafana-api-golang-client v0.21.0
+	github.com/grafana/grafana-api-golang-client v0.23.0
+	github.com/hashicorp/go-cleanhttp v0.5.2
 	k8s.io/apimachinery v0.26.2
 	k8s.io/client-go v0.26.2
 	k8s.io/klog/v2 v2.90.1
@@ -20,7 +21,6 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/uuid v1.3.0 // indirect
-	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/imdario/mergo v0.3.13 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
