@@ -38,14 +38,16 @@ func reconcileOrgBasic(grafanaOrgLookup map[string]grafana.Org, grafanaClient *G
 	return &grafanaOrg, nil
 }
 
-func reconcileOrgSettings(org *grafana.Org, orgName string, grafanaClient *GrafanaClient, dashboard map[string]interface{}) error {
+func reconcileOrgSettings(org *grafana.Org, orgName string, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
 	dataSource, err := reconcileOrgDataSource(org, orgName, grafanaClient)
 	if err != nil {
 		return err
 	}
-	err = reconcileOrgDashboard(org, dataSource, grafanaClient, dashboard)
-	if err != nil {
-		return err
+	for _, dashboard := range dashboards {
+		err = reconcileOrgDashboard(org, dataSource, grafanaClient, dashboard)
+		if err != nil {
+			return err
+		}
 	}
 	klog.Infof("Organization %d OK", org.ID)
 	return nil
@@ -118,8 +120,13 @@ func reconcileOrgDataSource(org *grafana.Org, orgName string, grafanaClient *Gra
 	return configuredDataSource, nil
 }
 
-func reconcileOrgDashboard(org *grafana.Org, dataSource *grafana.DataSource, grafanaClient *GrafanaClient, dashboardModel map[string]interface{}) error {
-	dashboardTitle, ok := dashboardModel["title"]
+func reconcileOrgDashboard(org *grafana.Org, dataSource *grafana.DataSource, grafanaClient *GrafanaClient, dashboard Dashboard) error {
+	folder, err := reconcileOrgDashboardFolder(org, grafanaClient, dashboard.Folder)
+	if err != nil {
+		return err
+	}
+
+	dashboardTitle, ok := dashboard.Data["title"]
 	if !ok {
 		errors.New("Invalid dashboard format: 'title' key not found")
 	}
@@ -128,27 +135,50 @@ func reconcileOrgDashboard(org *grafana.Org, dataSource *grafana.DataSource, gra
 	if err != nil {
 		return err
 	}
-	for _, dashboard := range dashboards {
-		if dashboardTitle == dashboard.Title {
+	for _, db := range dashboards {
+		if db.FolderUID != folder.UID {
+			// not in our folder, ignore
+			continue
+		}
+		if dashboardTitle == db.Title {
 			// Dashboard with this title already exists. We don't try to "fix" the dashboards for now, as this can cause various issues.
 			//klog.Infof("Grafana organization %d already has dashboard '%s'", org.ID, dashboardTitle)
 			return nil
 		}
 	}
 
-	err = configureDashboard(dashboardModel, dataSource)
+	// FIXME not required?
+	/*err = configureDashboard(dashboard.Data, dataSource)
 	if err != nil {
 		return err
-	}
+	}*/
 
-	dashboard := grafana.Dashboard{
-		Model:     dashboardModel,
+	db := grafana.Dashboard{
+		Model:     dashboard.Data,
 		Overwrite: true,
+		FolderUID: folder.UID,
 	}
 	klog.Infof("Creating dashboard '%s' for organization %d", dashboardTitle, org.ID)
-	_, err = grafanaClient.NewDashboard(org, dashboard)
+	_, err = grafanaClient.NewDashboard(org, db)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func reconcileOrgDashboardFolder(org *grafana.Org, grafanaClient *GrafanaClient, title string) (*grafana.Folder, error) {
+	folders, err := grafanaClient.Folders(org)
+	if err != nil {
+		return nil, err
+	}
+	for _, folder := range folders {
+		if folder.Title == title {
+			return &folder, nil
+		}
+	}
+	folder, err := grafanaClient.NewFolder(org, title)
+	if err != nil {
+		return nil, err
+	}
+	return &folder, nil
 }

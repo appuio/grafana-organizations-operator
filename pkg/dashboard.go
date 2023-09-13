@@ -6,16 +6,20 @@ import (
 	grafana "github.com/grafana/grafana-api-golang-client"
 )
 
-func configureDashboard(dashboardModel map[string]interface{}, dataSource *grafana.DataSource) error {
-	var dataSourceMap = make(map[string]string)
-	dataSourceMap["type"] = dataSource.Type
-	dataSourceMap["uid"] = dataSource.UID
+type Dashboard struct {
+	Folder string
+	Data   map[string]interface{}
+}
 
+func configureDashboard(dashboardModel map[string]interface{}, dataSource *grafana.DataSource) error {
 	delete(dashboardModel, "id")
 	delete(dashboardModel, "uid")
 	delete(dashboardModel, "version")
 	delete(dashboardModel, "time")
 
+	var dataSourceMap = make(map[string]string)
+	dataSourceMap["type"] = dataSource.Type
+	dataSourceMap["uid"] = dataSource.UID
 	if panels, ok := dashboardModel["panels"]; ok {
 		panelsArray, ok := panels.([]interface{})
 		if !ok {

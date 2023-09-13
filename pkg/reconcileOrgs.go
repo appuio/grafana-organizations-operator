@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func reconcileAllOrgs(ctx context.Context, keycloakOrganizations []*KeycloakGroup, grafanaClient *GrafanaClient, dashboard map[string]interface{}) (map[string]*grafana.Org, error) {
+func reconcileAllOrgs(ctx context.Context, keycloakOrganizations []*KeycloakGroup, grafanaClient *GrafanaClient, dashboards []Dashboard) (map[string]*grafana.Org, error) {
 	grafanaOrgLookupFinal := make(map[string]*grafana.Org)
 
 	// Get all orgs from Grafana
@@ -34,7 +34,7 @@ func reconcileAllOrgs(ctx context.Context, keycloakOrganizations []*KeycloakGrou
 		}
 		delete(grafanaOrgLookup, keycloakOrganization.Name)
 
-		err = reconcileOrgSettings(grafanaOrg, keycloakOrganization.Name, grafanaClient, dashboard)
+		err = reconcileOrgSettings(grafanaOrg, keycloakOrganization.Name, grafanaClient, dashboards)
 		if err != nil {
 			return nil, err
 		}
