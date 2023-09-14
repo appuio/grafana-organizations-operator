@@ -13,5 +13,5 @@ RUN make build
 FROM busybox
 COPY --from=builder /build/grafana-organizations-operator /
 COPY --from=alpine:latest /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY default-dashboard.json /
+COPY dashboards/ /dashboards/
 CMD ["/grafana-organizations-operator"]

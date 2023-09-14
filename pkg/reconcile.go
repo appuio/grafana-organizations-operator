@@ -10,7 +10,7 @@ var (
 	interruptedError = errors.New("interrupted")
 )
 
-func Reconcile(ctx context.Context, keycloakClient *KeycloakClient, grafanaClient *GrafanaClient, dashboard map[string]interface{}) error {
+func Reconcile(ctx context.Context, keycloakClient *KeycloakClient, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
 	klog.Infof("Fetching Keycloak access token...")
 	keycloakToken, err := keycloakClient.GetToken()
 	if err != nil {
@@ -74,7 +74,7 @@ outAutoAssignOrgUsers:
 	}
 	klog.Infof("Found %d auto_assign_org users", len(keycloakAutoAssignOrgUsers))
 
-	grafanaOrgsMap, err := reconcileAllOrgs(ctx, keycloakOrganizations, grafanaClient, dashboard)
+	grafanaOrgsMap, err := reconcileAllOrgs(ctx, keycloakOrganizations, grafanaClient, dashboards)
 	if err != nil {
 		return err
 	}

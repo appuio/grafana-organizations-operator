@@ -211,3 +211,13 @@ func (this *GrafanaClient) Dashboards(org *grafana.Org) ([]grafana.FolderDashboa
 func (this *GrafanaClient) NewDashboard(org *grafana.Org, dashboard grafana.Dashboard) (*grafana.DashboardSaveResponse, error) {
 	return this.grafanaClient.WithOrgID(org.ID).NewDashboard(dashboard)
 }
+
+// Ditto
+func (this *GrafanaClient) Folders(org *grafana.Org) ([]grafana.Folder, error) {
+	return this.grafanaClient.WithOrgID(org.ID).Folders()
+}
+
+// Ditto
+func (this *GrafanaClient) NewFolder(org *grafana.Org, folderName string) (grafana.Folder, error) {
+	return this.grafanaClient.WithOrgID(org.ID).NewFolder(folderName)
+}

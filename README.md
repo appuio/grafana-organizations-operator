@@ -2,6 +2,13 @@
 
 Automatically set up Grafana organizations based on information in Keycloak.
 
+## Features
+
+* The organizations-operator creates an organization for each Keycloak subgroup of "organizations/".
+* The operator creates a Mimir data source for each organization. The data source uses the "X-Scope-OrgID" header to make sure the data returned by Mimir is scoped to the organization only.
+* The operator sets up a set of default dashboards for each organization
+* For every user that exists in Grafana the operator will set up the permissions according to group memberships in Keycloak. See "Design" for more details.
+
 ## Design
 
 ### Data in Keycloak
@@ -36,6 +43,16 @@ The Grafana Organizations Operator only cares about organizations present in Key
 * Grafana may make it impossible in the future to change permissions of OAuth users via the API. Today it is already impossible via the UI. This would break the operator in its current form entirely.
 * Because the `grafana-api-golang-client` implementation is incomplete we are wrapping it in the GrafanaClient type and add some functionality.
 * The Grafana API often ignores the OrgID JSON field. The only workaround for this is to set the HTTP header `x-grafana-org-id`. The GrafanaClient wrapper takes care of this.
+
+### Managing Dashboards
+
+The dashboard json needs to be put into the `dashboards/v[X]` directory and will be picked up from there.
+
+The operator does not modify/update existing dashboards, it only installs new/missing dashboards. This is because Grafana may change dashboards (users may change them or Grafana might migrate them during a version upgrade), and we don't want the operator to revert those changes. In order to still be able to install newer versions of dashboards, the dashboard folder in the Grafana UI is versioned ("General v[X]") with the version number corresponding to the directory name in `dashboards`. Hence to add new versions of dashboards you create a `v[X+1]` directory inside `dashboards` and put them there.
+
+The operator does not remove old dashboard versions; both old and current versions remain available to Grafana users. This may change in the future.
+
+The suggested dashboards to use are the "kubernetes-mixin" dashboards. There is a helper script `get-k8s-mixins-sh` which downloads and builds the latest dashboard version for you; once that's done you need to rebuild the operator image and roll it out.
 
 ## Development Environment Setup
 

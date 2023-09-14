@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	controller "github.com/appuio/grafana-organizations-operator/pkg"
 	grafana "github.com/grafana/grafana-api-golang-client"
 	"k8s.io/apimachinery/pkg/util/json"
@@ -10,6 +11,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
+	"sort"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -93,23 +97,21 @@ func main() {
 		cancel()
 	}()
 
-	db, err := os.ReadFile("default-dashboard.json")
+	dashboards, err := loadDashboards()
 	if err != nil {
-		klog.Errorf("Could not read default dashboard: %v\n", err)
+		klog.Errorf("Could not load dashboards: %v\n", err)
 		os.Exit(1)
 	}
-	dashboard := make(map[string]interface{})
-	json.Unmarshal(db, &dashboard)
 
 	klog.Info("Starting initial sync...")
-	err = controller.Reconcile(ctx, keycloakClient, grafanaClient, dashboard)
+	err = controller.Reconcile(ctx, keycloakClient, grafanaClient, dashboards)
 	if err != nil {
 		klog.Errorf("Could not do initial reconciliation: %v\n", err)
 		os.Exit(1)
 	}
 
 	for {
-		err = controller.Reconcile(ctx, keycloakClient, grafanaClient, dashboard)
+		err = controller.Reconcile(ctx, keycloakClient, grafanaClient, dashboards)
 		select {
 		case <-time.After(2 * time.Second):
 		case <-ctx.Done():
@@ -119,4 +121,58 @@ func main() {
 			klog.Errorf("Could not reconcile (will retry): %v\n", err)
 		}
 	}
+}
+
+func loadDashboards() ([]controller.Dashboard, error) {
+	dashboardsDir, err := os.Open("dashboards")
+	if err != nil {
+		return nil, err
+	}
+
+	files, err := dashboardsDir.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+	dashboardsDir.Close()
+
+	var versions []int
+	for _, v := range files {
+		matched, _ := regexp.MatchString("^v[0-9]+$", v.Name())
+		if v.IsDir() && matched {
+			version, _ := strconv.Atoi(v.Name()[1:])
+			versions = append(versions, version)
+		}
+	}
+	sort.Ints(versions)
+
+	latest := versions[len(versions)-1]
+
+	versionDir, err := os.Open(fmt.Sprintf("dashboards/v%d/", latest))
+	if err != nil {
+		return nil, err
+	}
+
+	files, err = versionDir.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+	versionDir.Close()
+
+	folderName := fmt.Sprintf("General v%d", latest)
+	var dashboards []controller.Dashboard
+	for _, file := range files {
+		path := fmt.Sprintf("%s/%s", versionDir.Name(), file.Name())
+		dashboardJson, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		dashboardMap := make(map[string]interface{})
+		err = json.Unmarshal(dashboardJson, &dashboardMap)
+		if err != nil {
+			return nil, err
+		}
+		dashboards = append(dashboards, controller.Dashboard{Data: dashboardMap, Folder: folderName})
+	}
+
+	return dashboards, nil
 }
