@@ -9,6 +9,7 @@ services:
     labels:
       k8ify.singleton: true
       k8ify.expose: operator-dev-grafana.$TEST_DOMAIN
+      k8ify.Ingress.annotations.cert-manager.io/cluster-issuer: letsencrypt-production
     deploy:
       resources:
         reservations:
