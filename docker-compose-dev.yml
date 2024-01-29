@@ -4,6 +4,21 @@ services:
     image: grafana/grafana-oss:9.5.3
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=$GF_SECURITY_ADMIN_PASSWORD
+      - GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true
+      - GF_AUTH_GENERIC_OAUTH_API_URL=https://id.test.vshn.net/auth/realms/VSHN-main-dev-realm/protocol/openid-connect/userinfo
+      - GF_AUTH_GENERIC_OAUTH_AUTH_URL=https://id.test.vshn.net/auth/realms/VSHN-main-dev-realm/protocol/openid-connect/auth
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_ID=operator-dev-grafana
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=$GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+      - GF_AUTH_GENERIC_OAUTH_ENABLED=true
+      - GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH=preferred_username
+      - GF_AUTH_GENERIC_OAUTH_NAME=VSHN Test Keycloak
+      - GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH='Deny'
+      - GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT=false
+      - GF_AUTH_GENERIC_OAUTH_SKIP_ORG_ROLE_SYNC=true
+      - GF_AUTH_GENERIC_OAUTH_SCOPES=openid profile email
+      - GF_AUTH_GENERIC_OAUTH_TOKEN_URL=https://id.test.vshn.net/auth/realms/VSHN-main-dev-realm/protocol/openid-connect/token
+      - GF_SERVER_DOMAIN=operator-dev-grafana.apps.cloudscale-lpg-2.appuio.cloud
+      - GF_SERVER_ROOT_URL=https://operator-dev-grafana.apps.cloudscale-lpg-2.appuio.cloud
     ports:
       - "3000:3000"
     labels:
@@ -15,3 +30,10 @@ services:
         reservations:
           cpus: "0.01"
           memory: 512M
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  grafana_data:
+    labels:
+      k8ify.singleton: true
