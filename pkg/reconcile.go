@@ -6,11 +6,17 @@ import (
 	"k8s.io/klog/v2"
 )
 
+type Config struct {
+	GrafanaDatasourceUrl      string
+	GrafanaDatasourceUsername string
+	GrafanaDatasourcePassword string
+}
+
 var (
 	interruptedError = errors.New("interrupted")
 )
 
-func Reconcile(ctx context.Context, keycloakClient *KeycloakClient, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
+func Reconcile(ctx context.Context, config Config, keycloakClient *KeycloakClient, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
 	klog.Infof("Fetching Keycloak access token...")
 	keycloakToken, err := keycloakClient.GetToken()
 	if err != nil {
@@ -74,7 +80,7 @@ outAutoAssignOrgUsers:
 	}
 	klog.Infof("Found %d auto_assign_org users", len(keycloakAutoAssignOrgUsers))
 
-	grafanaOrgsMap, err := reconcileAllOrgs(ctx, keycloakOrganizations, grafanaClient, dashboards)
+	grafanaOrgsMap, err := reconcileAllOrgs(ctx, config, keycloakOrganizations, grafanaClient, dashboards)
 	if err != nil {
 		return err
 	}
