@@ -38,8 +38,8 @@ func reconcileOrgBasic(grafanaOrgLookup map[string]grafana.Org, grafanaClient *G
 	return &grafanaOrg, nil
 }
 
-func reconcileOrgSettings(org *grafana.Org, orgName string, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
-	dataSource, err := reconcileOrgDataSource(org, orgName, grafanaClient)
+func reconcileOrgSettings(config Config, org *grafana.Org, orgName string, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
+	dataSource, err := reconcileOrgDataSource(config, org, orgName, grafanaClient)
 	if err != nil {
 		return err
 	}
@@ -53,23 +53,31 @@ func reconcileOrgSettings(org *grafana.Org, orgName string, grafanaClient *Grafa
 	return nil
 }
 
-func reconcileOrgDataSource(org *grafana.Org, orgName string, grafanaClient *GrafanaClient) (*grafana.DataSource, error) {
+func reconcileOrgDataSource(config Config, org *grafana.Org, orgName string, grafanaClient *GrafanaClient) (*grafana.DataSource, error) {
+	secureJSONData := map[string]interface{}{
+		"httpHeaderValue1": orgName,
+	}
+	basicAuth := config.GrafanaDatasourceUsername != ""
+	if basicAuth {
+		secureJSONData["basicAuthPassword"] = config.GrafanaDatasourcePassword
+	}
+
 	// If you add/remove fields here you must also adjust the 'if' statement further down
 	desiredDataSource := &grafana.DataSource{
-		Name:      "Mimir",
-		URL:       "http://vshn-appuio-mimir-query-frontend.vshn-appuio-mimir.svc.cluster.local:8080/prometheus",
-		OrgID:     org.ID, // doesn't actually do anything, we just keep it here in case it becomes relevant with some never version of the client library. The actual orgId is taken from the 'X-Grafana-Org-Id' HTTP header which is set up via grafanaConfig.OrgID
-		Type:      "prometheus",
-		IsDefault: true,
+		Name:          "Mimir",
+		URL:           config.GrafanaDatasourceUrl,
+		BasicAuth:     basicAuth,
+		BasicAuthUser: config.GrafanaDatasourceUsername,
+		OrgID:         org.ID, // doesn't actually do anything, we just keep it here in case it becomes relevant with some never version of the client library. The actual orgId is taken from the 'X-Grafana-Org-Id' HTTP header which is set up via grafanaConfig.OrgID
+		Type:          "prometheus",
+		IsDefault:     true,
 		JSONData: map[string]interface{}{
 			"httpHeaderName1": "X-Scope-OrgID",
 			"httpMethod":      "POST",
 			"prometheusType":  "Mimir",
 		},
-		SecureJSONData: map[string]interface{}{
-			"httpHeaderValue1": orgName,
-		},
-		Access: "proxy",
+		SecureJSONData: secureJSONData,
+		Access:         "proxy",
 	}
 
 	var configuredDataSource *grafana.DataSource
@@ -82,10 +90,12 @@ func reconcileOrgDataSource(org *grafana.Org, orgName string, grafanaClient *Gra
 		for _, dataSource := range dataSources {
 			if dataSource.Name == desiredDataSource.Name {
 				if dataSource.URL != desiredDataSource.URL ||
+					dataSource.BasicAuth != desiredDataSource.BasicAuth ||
 					dataSource.Type != desiredDataSource.Type ||
 					dataSource.IsDefault != desiredDataSource.IsDefault ||
 					!reflect.DeepEqual(dataSource.JSONData, desiredDataSource.JSONData) ||
 					dataSource.Access != desiredDataSource.Access {
+					// note that we can't detect changed basic auth credentials (BasicAuthUser, secureJSONData) because the API does not give us the current settings
 					klog.Infof("Organization %d has misconfigured data source, fixing", org.ID)
 					desiredDataSource.ID = dataSource.ID
 					desiredDataSource.UID = dataSource.UID
@@ -99,7 +109,7 @@ func reconcileOrgDataSource(org *grafana.Org, orgName string, grafanaClient *Gra
 				}
 			} else {
 				klog.Infof("Organization %d has invalid data source %d %s, removing", org.ID, dataSource.ID, dataSource.Name)
-				grafanaClient.DeleteDataSource(org, dataSource.ID)
+				err = grafanaClient.DeleteDataSource(org, dataSource.ID)
 				if err != nil {
 					return nil, err
 				}
@@ -128,7 +138,7 @@ func reconcileOrgDashboard(org *grafana.Org, dataSource *grafana.DataSource, gra
 
 	dashboardTitle, ok := dashboard.Data["title"]
 	if !ok {
-		errors.New("Invalid dashboard format: 'title' key not found")
+		return errors.New("Invalid dashboard format: 'title' key not found")
 	}
 
 	dashboards, err := grafanaClient.Dashboards(org)
@@ -146,12 +156,6 @@ func reconcileOrgDashboard(org *grafana.Org, dataSource *grafana.DataSource, gra
 			return nil
 		}
 	}
-
-	// FIXME not required?
-	/*err = configureDashboard(dashboard.Data, dataSource)
-	if err != nil {
-		return err
-	}*/
 
 	db := grafana.Dashboard{
 		Model:     dashboard.Data,

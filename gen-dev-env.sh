@@ -12,3 +12,6 @@ echo "export GRAFANA_USERNAME=\"admin\"" >> env
 echo -n "export GRAFANA_PASSWORD=\"" >> env
 kubectl --as cluster-admin -n vshn-grafana-organizations-operator-dev get secret grafana-env -ojsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}' | base64 -d >> env
 echo "\"" >> env
+echo "export GRAFANA_DATASOURCE_URL=\"http://vshn-appuio-mimir-nginx.vshn-appuio-mimir.svc.cluster.local/prometheus\"" >> env
+echo "export GRAFANA_DATASOURCE_USERNAME=\"dummyuser\"" >> env
+echo "export GRAFANA_DATASOURCE_PASSWORD=\"dummypass\"" >> env
