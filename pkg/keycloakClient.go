@@ -14,16 +14,15 @@ import (
 )
 
 type KeycloakClient struct {
-	baseURL                url.URL
-	username               string
-	password               string
-	clientId               string
-	realm                  string
-	adminGroupPath         string
-	autoAssignOrgGroupPath string
-	country                string
-	adminGroup             *KeycloakGroup
-	client                 *http.Client
+	baseURL        url.URL
+	username       string
+	password       string
+	clientId       string
+	realm          string
+	adminGroupPath string
+	country        string
+	adminGroup     *KeycloakGroup
+	client         *http.Client
 }
 
 type KeycloakUser struct {
@@ -91,7 +90,7 @@ func (this *KeycloakUser) GetDisplayName() string {
 	return this.FirstName + " " + this.LastName
 }
 
-func NewKeycloakClient(baseURL string, realm string, username string, password string, clientId string, adminGroupPath string, autoAssignOrgGroupPath string) (*KeycloakClient, error) {
+func NewKeycloakClient(baseURL string, realm string, username string, password string, clientId string, adminGroupPath string) (*KeycloakClient, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
@@ -104,14 +103,13 @@ func NewKeycloakClient(baseURL string, realm string, username string, password s
 	}
 
 	return &KeycloakClient{
-		baseURL:                *u,
-		client:                 cli,
-		realm:                  realm,
-		username:               username,
-		password:               password,
-		clientId:               clientId,
-		adminGroupPath:         adminGroupPath,
-		autoAssignOrgGroupPath: autoAssignOrgGroupPath,
+		baseURL:        *u,
+		client:         cli,
+		realm:          realm,
+		username:       username,
+		password:       password,
+		clientId:       clientId,
+		adminGroupPath: adminGroupPath,
 	}, nil
 }
 

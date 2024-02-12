@@ -19,6 +19,7 @@ services:
       - GF_AUTH_GENERIC_OAUTH_TOKEN_URL=https://id.test.vshn.net/auth/realms/VSHN-main-dev-realm/protocol/openid-connect/token
       - GF_SERVER_DOMAIN=operator-dev-grafana.apps.cloudscale-lpg-2.appuio.cloud
       - GF_SERVER_ROOT_URL=https://operator-dev-grafana.apps.cloudscale-lpg-2.appuio.cloud
+      - GF_USERS_AUTO_ASSIGN_ORG_ID=83
     ports:
       - "3000:3000"
     labels:

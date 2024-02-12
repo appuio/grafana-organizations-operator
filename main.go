@@ -40,6 +40,7 @@ func main() {
 	if config.GrafanaDatasourcePassword != "" {
 		grafanaDatasourcePasswordHidden = "***hidden***"
 	}
+	config.GrafanaClearAutoAssignOrg = os.Getenv("GRAFANA_CLEAR_AUTO_ASSIGN_ORG") == "true"
 
 	keycloakUrl := os.Getenv("KEYCLOAK_URL")
 	keycloakRealm := os.Getenv("KEYCLOAK_REALM")
@@ -51,7 +52,6 @@ func main() {
 		keycloakPasswordHidden = "***hidden***"
 	}
 	keycloakAdminGroupPath := os.Getenv("KEYCLOAK_ADMIN_GROUP_PATH")
-	keycloakAutoAssignOrgGroupPath := os.Getenv("KEYCLOAK_AUTO_ASSIGN_ORG_GROUP_PATH")
 
 	klog.Infof("GRAFANA_URL:                         %s\n", grafanaUrl)
 	klog.Infof("GRAFANA_USERNAME:                    %s\n", grafanaUsername)
@@ -59,15 +59,15 @@ func main() {
 	klog.Infof("GRAFANA_DATASOURCE_URL:              %s\n", config.GrafanaDatasourceUrl)
 	klog.Infof("GRAFANA_DATASOURCE_USERNAME:         %s\n", config.GrafanaDatasourceUsername)
 	klog.Infof("GRAFANA_DATASOURCE_PASSWORD:         %s\n", grafanaDatasourcePasswordHidden)
+	klog.Infof("GRAFANA_CLEAR_AUTO_ASSIGN_ORG:       %t\n", config.GrafanaClearAutoAssignOrg)
 	klog.Infof("KEYCLOAK_URL:                        %s\n", keycloakUrl)
 	klog.Infof("KEYCLOAK_REALM:                      %s\n", keycloakRealm)
 	klog.Infof("KEYCLOAK_USERNAME:                   %s\n", keycloakUsername)
 	klog.Infof("KEYCLOAK_PASSWORD:                   %s\n", keycloakPasswordHidden)
 	klog.Infof("KEYCLOAK_CLIENT_ID:                  %s\n", keycloakClientId)
 	klog.Infof("KEYCLOAK_ADMIN_GROUP_PATH:           %s\n", keycloakAdminGroupPath)
-	klog.Infof("KEYCLOAK_AUTO_ASSIGN_ORG_GROUP_PATH: %s\n", keycloakAutoAssignOrgGroupPath)
 
-	keycloakClient, err := controller.NewKeycloakClient(keycloakUrl, keycloakRealm, keycloakUsername, keycloakPassword, keycloakClientId, keycloakAdminGroupPath, keycloakAutoAssignOrgGroupPath)
+	keycloakClient, err := controller.NewKeycloakClient(keycloakUrl, keycloakRealm, keycloakUsername, keycloakPassword, keycloakClientId, keycloakAdminGroupPath)
 	if err != nil {
 		klog.Errorf("Could not create keycloakClient client: %v\n", err)
 		os.Exit(1)
