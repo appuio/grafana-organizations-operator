@@ -10,6 +10,7 @@ type Config struct {
 	GrafanaDatasourceUrl      string
 	GrafanaDatasourceUsername string
 	GrafanaDatasourcePassword string
+	GrafanaClearAutoAssignOrg bool
 }
 
 var (
@@ -67,35 +68,21 @@ outAdmins:
 	}
 	klog.Infof("Found %d admin users", len(keycloakAdmins))
 
-	klog.Infof("Extracting auto_assign_org users...")
-	var keycloakAutoAssignOrgUsers []*KeycloakUser
-outAutoAssignOrgUsers:
-	for _, user := range keycloakUsers {
-		for _, group := range keycloakUserGroups[user] {
-			if group.Path == keycloakClient.autoAssignOrgGroupPath {
-				keycloakAutoAssignOrgUsers = append(keycloakAutoAssignOrgUsers, user)
-				continue outAutoAssignOrgUsers
-			}
+	if config.GrafanaClearAutoAssignOrg {
+		klog.Infof("Fetching auto_assign_org_id...")
+		autoAssignOrgId, err := grafanaClient.GetAutoAssignOrgId()
+		if err != nil {
+			return err
+		}
+		klog.Infof("Removing members of auto_assign_org %d", autoAssignOrgId)
+		var permissions []GrafanaPermissionSpec
+		err = reconcileSingleOrgPermissions(ctx, permissions, autoAssignOrgId, grafanaClient)
+		if err != nil {
+			return err
 		}
 	}
-	klog.Infof("Found %d auto_assign_org users", len(keycloakAutoAssignOrgUsers))
 
 	grafanaOrgsMap, err := reconcileAllOrgs(ctx, config, keycloakOrganizations, grafanaClient, dashboards)
-	if err != nil {
-		return err
-	}
-
-	klog.Infof("Fetching auto_assign_org_id...")
-	autoAssignOrgId, err := grafanaClient.GetAutoAssignOrgId()
-	if err != nil {
-		return err
-	}
-	klog.Infof("Checking permissions of auto_assign_org %d", autoAssignOrgId)
-	var permissions []GrafanaPermissionSpec
-	for _, keycloakAutoAssignOrgUser := range keycloakAutoAssignOrgUsers {
-		permissions = append(permissions, GrafanaPermissionSpec{Uid: keycloakAutoAssignOrgUser.Username, PermittedRoles: []string{"Viewer", "Editor", "Admin"}})
-	}
-	err = reconcileSingleOrgPermissions(ctx, permissions, autoAssignOrgId, grafanaClient)
 	if err != nil {
 		return err
 	}
