@@ -68,6 +68,18 @@ outAdmins:
 	}
 	klog.Infof("Found %d admin users", len(keycloakAdmins))
 
+	grafanaOrgsMap, err := reconcileAllOrgs(ctx, config, keycloakOrganizations, grafanaClient, dashboards)
+	if err != nil {
+		return err
+	}
+
+	klog.Infof("Checking permissions of normal orgs...")
+	grafanaPermissionsMap := getGrafanaPermissionsMap(keycloakUserGroups, keycloakAdmins, keycloakOrganizations)
+	err = reconcilePermissions(ctx, grafanaPermissionsMap, grafanaOrgsMap, grafanaClient)
+	if err != nil {
+		return err
+	}
+
 	if config.GrafanaClearAutoAssignOrg {
 		klog.Infof("Fetching auto_assign_org_id...")
 		autoAssignOrgId, err := grafanaClient.GetAutoAssignOrgId()
@@ -80,18 +92,6 @@ outAdmins:
 		if err != nil {
 			return err
 		}
-	}
-
-	grafanaOrgsMap, err := reconcileAllOrgs(ctx, config, keycloakOrganizations, grafanaClient, dashboards)
-	if err != nil {
-		return err
-	}
-
-	klog.Infof("Checking permissions of normal orgs...")
-	grafanaPermissionsMap := getGrafanaPermissionsMap(keycloakUserGroups, keycloakAdmins, keycloakOrganizations)
-	err = reconcilePermissions(ctx, grafanaPermissionsMap, grafanaOrgsMap, grafanaClient)
-	if err != nil {
-		return err
 	}
 
 	grafanaClient.CloseIdleConnections()
