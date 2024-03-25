@@ -39,12 +39,12 @@ func reconcileOrgBasic(grafanaOrgLookup map[string]grafana.Org, grafanaClient *G
 }
 
 func reconcileOrgSettings(config Config, org *grafana.Org, orgName string, grafanaClient *GrafanaClient, dashboards []Dashboard) error {
-	dataSource, err := reconcileOrgDataSource(config, org, orgName, grafanaClient)
+	err := reconcileOrgDataSources(config, org, orgName, grafanaClient)
 	if err != nil {
 		return err
 	}
 	for _, dashboard := range dashboards {
-		err = reconcileOrgDashboard(org, dataSource, grafanaClient, dashboard)
+		err = reconcileOrgDashboard(org, grafanaClient, dashboard)
 		if err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func reconcileOrgSettings(config Config, org *grafana.Org, orgName string, grafa
 	return nil
 }
 
-func reconcileOrgDataSource(config Config, org *grafana.Org, orgName string, grafanaClient *GrafanaClient) (*grafana.DataSource, error) {
+func reconcileOrgDataSources(config Config, org *grafana.Org, orgName string, grafanaClient *GrafanaClient) error {
 	secureJSONData := map[string]interface{}{
 		"httpHeaderValue1": orgName,
 	}
@@ -62,10 +62,10 @@ func reconcileOrgDataSource(config Config, org *grafana.Org, orgName string, gra
 		secureJSONData["basicAuthPassword"] = config.GrafanaDatasourcePassword
 	}
 
-	// If you add/remove fields here you must also adjust the 'if' statement further down
-	desiredDataSource := &grafana.DataSource{
+	// If you add/remove fields here you must also adjust the 'if' statement in reconcileOrgDataSource()
+	prometheusSource := &grafana.DataSource{
 		Name:          "Mimir",
-		URL:           config.GrafanaDatasourceUrl,
+		URL:           config.GrafanaDatasourceUrl + "/prometheus",
 		BasicAuth:     basicAuth,
 		BasicAuthUser: config.GrafanaDatasourceUsername,
 		OrgID:         org.ID, // doesn't actually do anything, we just keep it here in case it becomes relevant with some never version of the client library. The actual orgId is taken from the 'X-Grafana-Org-Id' HTTP header which is set up via grafanaConfig.OrgID
@@ -80,39 +80,65 @@ func reconcileOrgDataSource(config Config, org *grafana.Org, orgName string, gra
 		Access:         "proxy",
 	}
 
-	var configuredDataSource *grafana.DataSource
-	configuredDataSource = nil
+	alertmanagerSource := &grafana.DataSource{
+		Name:          "Mimir Alertmanager",
+		URL:           config.GrafanaDatasourceUrl,
+		BasicAuth:     basicAuth,
+		BasicAuthUser: config.GrafanaDatasourceUsername,
+		OrgID:         org.ID, // doesn't actually do anything, we just keep it here in case it becomes relevant with some never version of the client library. The actual orgId is taken from the 'X-Grafana-Org-Id' HTTP header which is set up via grafanaConfig.OrgID
+		Type:          "alertmanager",
+		IsDefault:     false,
+		JSONData: map[string]interface{}{
+			"httpHeaderName1": "X-Scope-OrgID",
+			"httpMethod":      "POST",
+		},
+		SecureJSONData: secureJSONData,
+		Access:         "proxy",
+	}
+
 	dataSources, err := grafanaClient.DataSources(org)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if len(dataSources) > 0 {
-		for _, dataSource := range dataSources {
-			if dataSource.Name == desiredDataSource.Name {
-				if dataSource.URL != desiredDataSource.URL ||
-					dataSource.BasicAuth != desiredDataSource.BasicAuth ||
-					dataSource.Type != desiredDataSource.Type ||
-					dataSource.IsDefault != desiredDataSource.IsDefault ||
-					!reflect.DeepEqual(dataSource.JSONData, desiredDataSource.JSONData) ||
-					dataSource.Access != desiredDataSource.Access {
-					// note that we can't detect changed basic auth credentials (BasicAuthUser, secureJSONData) because the API does not give us the current settings
-					klog.Infof("Organization %d has misconfigured data source, fixing", org.ID)
-					desiredDataSource.ID = dataSource.ID
-					desiredDataSource.UID = dataSource.UID
-					err := grafanaClient.UpdateDataSource(org, desiredDataSource)
-					if err != nil {
-						return nil, err
-					}
-					configuredDataSource = desiredDataSource
-				} else {
-					configuredDataSource = dataSource
-				}
-			} else {
-				klog.Infof("Organization %d has invalid data source %d %s, removing", org.ID, dataSource.ID, dataSource.Name)
-				err = grafanaClient.DeleteDataSource(org, dataSource.ID)
+
+	reconcileOrgDataSource(org, dataSources, prometheusSource, grafanaClient)
+	reconcileOrgDataSource(org, dataSources, alertmanagerSource, grafanaClient)
+
+	for _, dataSource := range dataSources {
+		if dataSource.Name != prometheusSource.Name && dataSource.Name != alertmanagerSource.Name {
+			klog.Infof("Organization %d has invalid data source %d %s, removing", org.ID, dataSource.ID, dataSource.Name)
+			err = grafanaClient.DeleteDataSource(org, dataSource.ID)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func reconcileOrgDataSource(org *grafana.Org, dataSources []*grafana.DataSource, desiredDataSource *grafana.DataSource, grafanaClient *GrafanaClient) error {
+	var configuredDataSource *grafana.DataSource
+	configuredDataSource = nil
+	for _, dataSource := range dataSources {
+		if dataSource.Name == desiredDataSource.Name {
+			if dataSource.URL != desiredDataSource.URL ||
+				dataSource.BasicAuth != desiredDataSource.BasicAuth ||
+				dataSource.Type != desiredDataSource.Type ||
+				dataSource.IsDefault != desiredDataSource.IsDefault ||
+				!reflect.DeepEqual(dataSource.JSONData, desiredDataSource.JSONData) ||
+				dataSource.Access != desiredDataSource.Access {
+				// note that we can't detect changed basic auth credentials (BasicAuthUser, secureJSONData) because the API does not give us the current settings
+				klog.Infof("Organization %d has misconfigured data source, fixing", org.ID)
+				desiredDataSource.ID = dataSource.ID
+				desiredDataSource.UID = dataSource.UID
+				err := grafanaClient.UpdateDataSource(org, desiredDataSource)
 				if err != nil {
-					return nil, err
+					return err
 				}
+				configuredDataSource = desiredDataSource
+			} else {
+				configuredDataSource = dataSource
 			}
 		}
 	}
@@ -120,17 +146,17 @@ func reconcileOrgDataSource(config Config, org *grafana.Org, orgName string, gra
 		klog.Infof("Organization %d missing data source, creating", org.ID)
 		dataSourceId, err := grafanaClient.NewDataSource(org, desiredDataSource)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		configuredDataSource, err = grafanaClient.DataSource(org, dataSourceId)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return configuredDataSource, nil
+	return nil
 }
 
-func reconcileOrgDashboard(org *grafana.Org, dataSource *grafana.DataSource, grafanaClient *GrafanaClient, dashboard Dashboard) error {
+func reconcileOrgDashboard(org *grafana.Org, grafanaClient *GrafanaClient, dashboard Dashboard) error {
 	folder, err := reconcileOrgDashboardFolder(org, grafanaClient, dashboard.Folder)
 	if err != nil {
 		return err
