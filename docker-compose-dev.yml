@@ -20,6 +20,7 @@ services:
       - GF_SERVER_DOMAIN=operator-dev-grafana.apps.cloudscale-lpg-2.appuio.cloud
       - GF_SERVER_ROOT_URL=https://operator-dev-grafana.apps.cloudscale-lpg-2.appuio.cloud
       - GF_USERS_AUTO_ASSIGN_ORG_ID=83
+      - GF_ALERTING_ENABLED=false
     ports:
       - "3000:3000"
     labels:
